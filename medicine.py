@@ -2,75 +2,92 @@ import sqlite3
 from datetime import date
 from fastmcp import FastMCP
 
-# ── Database Setup ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Database Configuration
+# ─────────────────────────────────────────────────────────────
 
 DB_PATH = "medicine_inventory.db"
 
 
 def get_connection():
-    """Create SQLite connection."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
-def row_to_dict(row):
-    """Convert sqlite row to plain dictionary."""
-    return {key: row[key] for key in row.keys()}
-
-
 def init_db():
-    """Initialize medicines table."""
+
     with get_connection() as conn:
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS medicines (
+
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 name TEXT NOT NULL UNIQUE,
-                quantity INTEGER NOT NULL CHECK(quantity >= 0),
-                unit TEXT NOT NULL DEFAULT 'units',
+
+                quantity INTEGER NOT NULL,
+
+                unit TEXT NOT NULL,
+
                 expiry_date TEXT,
+
                 manufacturer TEXT,
+
                 description TEXT,
+
                 created_at TEXT NOT NULL DEFAULT (date('now')),
+
                 updated_at TEXT NOT NULL DEFAULT (date('now'))
+
             )
         """)
+
         conn.commit()
 
 
-# ── MCP Server ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# MCP Server
+# ─────────────────────────────────────────────────────────────
 
-mcp = FastMCP(name="MedicineInventory")
+mcp = FastMCP("MedicineInventory")
 
+
+# ─────────────────────────────────────────────────────────────
+# Add Medicine
+# ─────────────────────────────────────────────────────────────
 
 @mcp.tool()
 def add_medicine(
     name: str,
-    quantity: int,
-    unit: str = "units",
-    expiry_date: str | None = None,
-    manufacturer: str | None = None,
-    description: str | None = None,
+    quantity: str,
+    unit: str,
+    expiry_date: str,
+    manufacturer: str,
+    description: str
 ):
-    """Add a medicine or restock existing medicine."""
-
-    if quantity <= 0:
-        return {
-            "success": False,
-            "error": "Quantity must be greater than zero."
-        }
-
-    if expiry_date:
-        try:
-            date.fromisoformat(expiry_date)
-        except ValueError:
-            return {
-                "success": False,
-                "error": "Expiry date must be YYYY-MM-DD."
-            }
+    """Add or restock medicine."""
 
     try:
+
+        quantity_int = int(quantity)
+
+        if quantity_int <= 0:
+            return {
+                "status": "error",
+                "message": "Quantity must be greater than zero"
+            }
+
+        if expiry_date != "":
+            try:
+                date.fromisoformat(expiry_date)
+            except Exception:
+                return {
+                    "status": "error",
+                    "message": "Expiry date must be YYYY-MM-DD"
+                }
+
         with get_connection() as conn:
 
             existing = conn.execute(
@@ -85,13 +102,13 @@ def add_medicine(
                     SET
                         quantity = quantity + ?,
                         unit = ?,
-                        expiry_date = COALESCE(?, expiry_date),
-                        manufacturer = COALESCE(?, manufacturer),
-                        description = COALESCE(?, description),
+                        expiry_date = ?,
+                        manufacturer = ?,
+                        description = ?,
                         updated_at = date('now')
                     WHERE id = ?
                 """, (
-                    quantity,
+                    quantity_int,
                     unit,
                     expiry_date,
                     manufacturer,
@@ -99,13 +116,17 @@ def add_medicine(
                     existing["id"]
                 ))
 
-                action = "restocked"
+                conn.commit()
+
+                return {
+                    "status": "success",
+                    "message": f"{name} restocked successfully"
+                }
 
             else:
 
                 conn.execute("""
-                    INSERT INTO medicines
-                    (
+                    INSERT INTO medicines (
                         name,
                         quantity,
                         unit,
@@ -116,40 +137,38 @@ def add_medicine(
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     name,
-                    quantity,
+                    quantity_int,
                     unit,
                     expiry_date,
                     manufacturer,
                     description
                 ))
 
-                action = "added"
+                conn.commit()
 
-            conn.commit()
+                return {
+                    "status": "success",
+                    "message": f"{name} added successfully"
+                }
 
-            row = conn.execute(
-                "SELECT * FROM medicines WHERE LOWER(name)=LOWER(?)",
-                (name,)
-            ).fetchone()
+    except Exception as e:
 
-            return {
-                "success": True,
-                "action": action,
-                "medicine": row_to_dict(row)
-            }
-
-    except sqlite3.Error as e:
         return {
-            "success": False,
-            "error": f"Database error: {str(e)}"
+            "status": "error",
+            "message": str(e)
         }
 
+
+# ─────────────────────────────────────────────────────────────
+# Get Medicine
+# ─────────────────────────────────────────────────────────────
 
 @mcp.tool()
 def get_medicine(name: str):
     """Get medicine details."""
 
     try:
+
         with get_connection() as conn:
 
             row = conn.execute(
@@ -158,66 +177,76 @@ def get_medicine(name: str):
             ).fetchone()
 
             if not row:
+
                 return {
-                    "success": False,
-                    "error": f"Medicine '{name}' not found."
+                    "status": "error",
+                    "message": "Medicine not found"
                 }
 
-            medicine = row_to_dict(row)
+            expiry_status = "No expiry information"
 
-            expiry_date = medicine.get("expiry_date")
-
-            if expiry_date:
+            if row["expiry_date"]:
 
                 days_left = (
-                    date.fromisoformat(expiry_date) - date.today()
+                    date.fromisoformat(row["expiry_date"]) - date.today()
                 ).days
 
                 if days_left < 0:
-                    medicine["expiry_status"] = (
-                        f"Expired {abs(days_left)} days ago"
-                    )
+                    expiry_status = f"Expired {abs(days_left)} days ago"
 
                 elif days_left <= 30:
-                    medicine["expiry_status"] = (
-                        f"Expiring soon ({days_left} days left)"
-                    )
+                    expiry_status = f"Expiring in {days_left} days"
 
                 else:
-                    medicine["expiry_status"] = (
-                        f"Valid ({days_left} days remaining)"
-                    )
+                    expiry_status = f"Valid for {days_left} days"
+
+            message = (
+                f"Medicine: {row['name']}, "
+                f"Quantity: {row['quantity']} {row['unit']}, "
+                f"Manufacturer: {row['manufacturer']}, "
+                f"Expiry Status: {expiry_status}"
+            )
 
             return {
-                "success": True,
-                "medicine": medicine
+                "status": "success",
+                "message": message
             }
 
-    except sqlite3.Error as e:
+    except Exception as e:
+
         return {
-            "success": False,
-            "error": f"Database error: {str(e)}"
+            "status": "error",
+            "message": str(e)
         }
 
 
+# ─────────────────────────────────────────────────────────────
+# List Medicines
+# ─────────────────────────────────────────────────────────────
+
 @mcp.tool()
 def list_medicines(
-    only_low_stock: bool = False,
-    low_stock_threshold: int = 10
+    only_low_stock: str,
+    low_stock_threshold: str
 ):
-    """List medicines from inventory."""
+    """List medicines."""
 
     try:
+
+        low_stock = only_low_stock.lower() == "true"
+
+        threshold = int(low_stock_threshold)
+
         with get_connection() as conn:
 
-            if only_low_stock:
+            if low_stock:
 
                 rows = conn.execute("""
                     SELECT *
                     FROM medicines
                     WHERE quantity <= ?
                     ORDER BY quantity ASC
-                """, (low_stock_threshold,)).fetchall()
+                """, (threshold,)).fetchall()
 
             else:
 
@@ -227,32 +256,56 @@ def list_medicines(
                     ORDER BY name ASC
                 """).fetchall()
 
-            medicines = [row_to_dict(row) for row in rows]
+            if len(rows) == 0:
+
+                return {
+                    "status": "success",
+                    "message": "No medicines found"
+                }
+
+            medicine_list = []
+
+            for row in rows:
+
+                medicine_list.append(
+                    f"{row['name']} ({row['quantity']} {row['unit']})"
+                )
 
             return {
-                "success": True,
-                "count": len(medicines),
-                "medicines": medicines
+                "status": "success",
+                "message": ", ".join(medicine_list)
             }
 
-    except sqlite3.Error as e:
+    except Exception as e:
+
         return {
-            "success": False,
-            "error": f"Database error: {str(e)}"
+            "status": "error",
+            "message": str(e)
         }
 
+
+# ─────────────────────────────────────────────────────────────
+# Update Quantity
+# ─────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def update_quantity(name: str, quantity: int):
+def update_quantity(
+    name: str,
+    quantity: str
+):
     """Update medicine quantity."""
 
-    if quantity < 0:
-        return {
-            "success": False,
-            "error": "Quantity cannot be negative."
-        }
-
     try:
+
+        quantity_int = int(quantity)
+
+        if quantity_int < 0:
+
+            return {
+                "status": "error",
+                "message": "Quantity cannot be negative"
+            }
+
         with get_connection() as conn:
 
             result = conn.execute("""
@@ -262,41 +315,42 @@ def update_quantity(name: str, quantity: int):
                     updated_at = date('now')
                 WHERE LOWER(name)=LOWER(?)
             """, (
-                quantity,
+                quantity_int,
                 name
             ))
 
             conn.commit()
 
             if result.rowcount == 0:
+
                 return {
-                    "success": False,
-                    "error": f"Medicine '{name}' not found."
+                    "status": "error",
+                    "message": "Medicine not found"
                 }
 
-            row = conn.execute(
-                "SELECT * FROM medicines WHERE LOWER(name)=LOWER(?)",
-                (name,)
-            ).fetchone()
-
             return {
-                "success": True,
-                "action": "updated",
-                "medicine": row_to_dict(row)
+                "status": "success",
+                "message": f"{name} quantity updated to {quantity_int}"
             }
 
-    except sqlite3.Error as e:
+    except Exception as e:
+
         return {
-            "success": False,
-            "error": f"Database error: {str(e)}"
+            "status": "error",
+            "message": str(e)
         }
 
 
+# ─────────────────────────────────────────────────────────────
+# Delete Medicine
+# ─────────────────────────────────────────────────────────────
+
 @mcp.tool()
 def delete_medicine(name: str):
-    """Delete medicine from inventory."""
+    """Delete medicine."""
 
     try:
+
         with get_connection() as conn:
 
             result = conn.execute(
@@ -307,31 +361,34 @@ def delete_medicine(name: str):
             conn.commit()
 
             if result.rowcount == 0:
+
                 return {
-                    "success": False,
-                    "error": f"Medicine '{name}' not found."
+                    "status": "error",
+                    "message": "Medicine not found"
                 }
 
             return {
-                "success": True,
-                "action": "deleted",
-                "name": name
+                "status": "success",
+                "message": f"{name} deleted successfully"
             }
 
-    except sqlite3.Error as e:
+    except Exception as e:
+
         return {
-            "success": False,
-            "error": f"Database error: {str(e)}"
+            "status": "error",
+            "message": str(e)
         }
 
 
-# ── Main Entry ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
 
     init_db()
 
-    print("Medicine Inventory MCP SSE server running on port 8000")
+    print("Medicine Inventory MCP SSE Server Running On Port 8000")
 
     mcp.run(
         transport="sse",
