@@ -241,4 +241,4 @@ def delete_medicine(name: str) -> dict:
 if __name__ == "__main__":
     init_db()
     print("Medicine Inventory MCP server starting…")
-    mcp.run()
+    mcp.run(transport="sse", host="0.0.0.0", port=8000)
