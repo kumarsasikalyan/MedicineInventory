@@ -36,7 +36,7 @@ def init_db() -> None:
 
 mcp = FastMCP(name="MedicineInventory")
 
-@mcp.tool
+@mcp.tool()
 def add_medicine(
     name: str,
     quantity: int,
@@ -75,7 +75,6 @@ def add_medicine(
             ).fetchone()
 
             if existing:
-                # Restock: add to existing quantity and update metadata
                 conn.execute("""
                     UPDATE medicines
                     SET quantity     = quantity + ?,
@@ -89,7 +88,6 @@ def add_medicine(
                 conn.commit()
                 action = "restocked"
             else:
-                # New entry
                 conn.execute("""
                     INSERT INTO medicines
                         (name, quantity, unit, expiry_date, manufacturer, description)
@@ -108,7 +106,7 @@ def add_medicine(
         return {"error": f"Database error: {e}"}
 
 
-@mcp.tool
+@mcp.tool()
 def get_medicine(name: str) -> dict:
     """
     Retrieve full details of a medicine by name.
@@ -130,7 +128,6 @@ def get_medicine(name: str) -> dict:
 
         medicine = dict(row)
 
-        # Add a human-friendly expiry warning
         if medicine.get("expiry_date"):
             days_left = (date.fromisoformat(medicine["expiry_date"]) - date.today()).days
             if days_left < 0:
@@ -146,7 +143,7 @@ def get_medicine(name: str) -> dict:
         return {"error": f"Database error: {e}"}
 
 
-@mcp.tool
+@mcp.tool()
 def list_medicines(only_low_stock: bool = False, low_stock_threshold: int = 10) -> dict:
     """
     List all medicines in the inventory.
@@ -175,7 +172,7 @@ def list_medicines(only_low_stock: bool = False, low_stock_threshold: int = 10) 
         return {"error": f"Database error: {e}"}
 
 
-@mcp.tool
+@mcp.tool()
 def update_quantity(name: str, quantity: int) -> dict:
     """
     Directly set the quantity of an existing medicine (e.g. after a stock-take).
@@ -212,7 +209,7 @@ def update_quantity(name: str, quantity: int) -> dict:
         return {"error": f"Database error: {e}"}
 
 
-@mcp.tool
+@mcp.tool()
 def delete_medicine(name: str) -> dict:
     """
     Remove a medicine from the inventory permanently.
